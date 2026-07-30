@@ -1,13 +1,10 @@
-name: Build GCC 3.4.4 MinGW
+name: Build MinGW GCC 3.4.4 for Windows
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - ".github/workflows/**"
-  pull_request:
-    paths:
-      - ".github/workflows/**"
+      - '.github/workflows/**'
 
 permissions:
   contents: write
@@ -23,208 +20,313 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare workspace
+      - name: Prepare work directory on host
         run: |
-          rm -rf work dist
-          mkdir -p work dist
+          mkdir -p "${{ github.workspace }}/work"
+          chmod 777 "${{ github.workspace }}/work"
 
-      - name: Build native Windows GCC in Debian 8
+      - name: Build in Debian 8 container
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/work:/work" \
-            -v "${{ github.workspace }}/dist:/dist" \
-            -e TARGET="${TARGET}" \
-            -e GCC_VERSION="${GCC_VERSION}" \
-            -e BINUTILS_VERSION="${BINUTILS_VERSION}" \
-            -e W32API_VERSION="${W32API_VERSION}" \
-            -e MINGW_RUNTIME_VERSION="${MINGW_RUNTIME_VERSION}" \
+            -e TARGET=${{ env.TARGET }} \
+            -e GCC_VERSION=${{ env.GCC_VERSION }} \
+            -e BINUTILS_VERSION=${{ env.BINUTILS_VERSION }} \
+            -e W32API_VERSION=${{ env.W32API_VERSION }} \
+            -e MINGW_RUNTIME_VERSION=${{ env.MINGW_RUNTIME_VERSION }} \
             debian:8 \
             /bin/bash -c '
-              set -euo pipefail
-              export DEBIAN_FRONTEND=noninteractive
-
-              cat > /etc/apt/sources.list <<EOF
+          set -e
+          
+          # ===== 配置 Debian 8 归档源 =====
+          cat > /etc/apt/sources.list <<EOF
           deb http://archive.debian.org/debian/ jessie main
           deb http://archive.debian.org/debian-security/ jessie/updates main
           EOF
-
-              printf "Acquire::Check-Valid-Until \"false\";\nAcquire::AllowInsecureRepositories \"true\";\nAcquire::AllowDowngradeToInsecureRepositories \"true\";\n" > /etc/apt/apt.conf.d/99archive
-
-              apt-get update
-              apt-get install -y --no-install-recommends --allow-unauthenticated \
-                ca-certificates curl bzip2 gzip tar xz-utils make gcc g++ libc6-dev patch file
-
-              export PREFIX=/work/cross
-              export NATIVE_PREFIX=/work/native
-              export SRC=/work/src
-              export BUILD=/work/build
-              export PATH="${PREFIX}/bin:${PATH}"
-              mkdir -p "${SRC}" "${BUILD}" "${PREFIX}" "${NATIVE_PREFIX}"
-
-              # ---- 关键：不再用 tail 截断，改为全量日志 + 失败时抓 error ----
-              run_make() {
-                logfile="$1"; shift
-                echo ">>> make $* (log: ${logfile})"
-                if make "$@" > "${logfile}" 2>&1; then
-                  echo ">>> make $* OK"
-                else
-                  rc=$?
-                  echo "======================================================"
-                  echo "make FAILED (rc=${rc}). Real error lines below:"
-                  echo "======================================================"
-                  # 抓真正的错误，带上下文；GNU grep 支持 -B/-A
-                  grep -n -E "error:|Error|\*\*\*|undefined reference|No such file|cannot find|fatal" "${logfile}" | tail -60 || true
-                  echo "------------------ tail of full log ------------------"
-                  tail -80 "${logfile}"
-                  echo "======================================================"
-                  return "${rc}"
-                fi
-              }
-
-              download() {
-                url="$1"; out="$2"
-                echo "Downloading ${url} -> ${out}"
-                curl -L --fail --retry 5 --retry-delay 5 -o "${out}" "${url}"
-                case "${out}" in
-                  *.tar.gz|*.tgz) gzip -t "${out}" ;;
-                  *.tar.bz2|*.tbz2) bzip2 -t "${out}" ;;
-                  *) echo "unknown archive: ${out}" >&2; exit 1 ;;
-                esac
-                if file "${out}" | grep -qiE "HTML|text"; then
-                  echo "ERROR: downloaded HTML instead of archive" >&2
-                  file "${out}" >&2; exit 1
-                fi
-              }
-
-              cd "${SRC}"
-              download "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2" "binutils-${BINUTILS_VERSION}.tar.bz2"
-              download "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.bz2" "gcc-${GCC_VERSION}.tar.bz2"
-              download "https://sourceforge.net/projects/mingw/files/OldFiles/w32api-${W32API_VERSION}/w32api-${W32API_VERSION}.tar.gz/download" "w32api-${W32API_VERSION}.tar.gz"
-              download "https://sourceforge.net/projects/mingw/files/OldFiles/mingw-runtime-${MINGW_RUNTIME_VERSION}/mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz/download" "mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz"
-
-              tar -xjf "binutils-${BINUTILS_VERSION}.tar.bz2"
-              tar -xjf "gcc-${GCC_VERSION}.tar.bz2"
-
-              mkdir -p "${PREFIX}/${TARGET}"
-              tar -xzf "w32api-${W32API_VERSION}.tar.gz" -C "${PREFIX}/${TARGET}"
-              tar -xzf "mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz" -C "${PREFIX}/${TARGET}"
-              ln -sfn "${TARGET}" "${PREFIX}/mingw"
-
-              echo "=== Building cross binutils ==="
-              mkdir -p "${BUILD}/binutils-cross"
-              cd "${BUILD}/binutils-cross"
-              "${SRC}/binutils-${BINUTILS_VERSION}/configure" \
-                --prefix="${PREFIX}" --target="${TARGET}" \
-                --disable-nls --disable-werror
-              # 并行编译；若失败，用串行重跑以便定位精确错误
-              if ! run_make "${BUILD}/binutils-cross.log" -j"$(nproc)"; then
-                echo "### Parallel build failed. Re-running SERIAL to pinpoint the error ###"
-                run_make "${BUILD}/binutils-cross.serial.log" -j1
-              fi
-              make install
-              ls -lh "${PREFIX}/bin/" || true
-
-              echo "=== Building cross GCC ==="
-              mkdir -p "${BUILD}/gcc-cross"
-              cd "${BUILD}/gcc-cross"
-              "${SRC}/gcc-${GCC_VERSION}/configure" \
-                --prefix="${PREFIX}" --target="${TARGET}" \
-                --enable-languages=c,c++ \
-                --disable-nls --disable-shared --disable-threads \
-                --disable-win32-registry \
-                --with-headers="${PREFIX}/${TARGET}/include" \
-                --with-gnu-as --with-gnu-ld --without-x
-
-              if ! run_make "${BUILD}/gcc-cross.log" -j"$(nproc)" all-gcc; then
-                run_make "${BUILD}/gcc-cross.serial.log" -j1 all-gcc
-              fi
-              make install-gcc
-
-              if ! run_make "${BUILD}/libgcc-cross.log" -j"$(nproc)" all-target-libgcc; then
-                run_make "${BUILD}/libgcc-cross.serial.log" -j1 all-target-libgcc
-              fi
-              make install-target-libgcc
-
-              echo "=== Cross toolchain verification ==="
-              "${TARGET}-gcc" --version
-              "${TARGET}-g++" --version
-
-              echo "=== Building native binutils (Canadian Cross) ==="
-              mkdir -p "${BUILD}/binutils-native"
-              cd "${BUILD}/binutils-native"
-              CC="${TARGET}-gcc" AR="${TARGET}-ar" RANLIB="${TARGET}-ranlib" \
-              "${SRC}/binutils-${BINUTILS_VERSION}/configure" \
-                --prefix="${NATIVE_PREFIX}" \
-                --build="$(gcc -dumpmachine)" --host="${TARGET}" --target="${TARGET}" \
-                --disable-nls --disable-werror
-              if ! run_make "${BUILD}/binutils-native.log" -j"$(nproc)"; then
-                run_make "${BUILD}/binutils-native.serial.log" -j1
-              fi
-              make install
-
-              echo "=== Building native GCC (Canadian Cross) ==="
-              mkdir -p "${BUILD}/gcc-native"
-              cd "${BUILD}/gcc-native"
-              export CC_FOR_BUILD=gcc
-              export CC="${TARGET}-gcc" CXX="${TARGET}-g++"
-              export AR="${TARGET}-ar" RANLIB="${TARGET}-ranlib"
-              export AS="${TARGET}-as" LD="${TARGET}-ld"
-              "${SRC}/gcc-${GCC_VERSION}/configure" \
-                --prefix="${NATIVE_PREFIX}" \
-                --build="$(gcc -dumpmachine)" --host="${TARGET}" --target="${TARGET}" \
-                --enable-languages=c,c++ \
-                --disable-nls --disable-shared --disable-threads \
-                --disable-win32-registry --with-gnu-as --with-gnu-ld --without-x
-              if ! run_make "${BUILD}/gcc-native.log" -j"$(nproc)" all-gcc; then
-                run_make "${BUILD}/gcc-native.serial.log" -j1 all-gcc
-              fi
-              make install-gcc
-              if ! run_make "${BUILD}/libgcc-native.log" -j"$(nproc)" all-target-libgcc; then
-                run_make "${BUILD}/libgcc-native.serial.log" -j1 all-target-libgcc
-              fi
-              make install-target-libgcc
-
-              mkdir -p "${NATIVE_PREFIX}/${TARGET}"
-              cp -a "${PREFIX}/${TARGET}/include" "${NATIVE_PREFIX}/${TARGET}/"
-              cp -a "${PREFIX}/${TARGET}/lib" "${NATIVE_PREFIX}/${TARGET}/"
-
-              cd /work
-              tar -cJf "/dist/gcc-${GCC_VERSION}-${TARGET}-native-windows.tar.xz" -C "${NATIVE_PREFIX}" .
-
-              echo "=== Verification ==="
-              ls -lh "${NATIVE_PREFIX}/bin/"
-              file "${NATIVE_PREFIX}/bin/gcc.exe"
-              test -f "${NATIVE_PREFIX}/bin/gcc.exe"
-              test -f "${NATIVE_PREFIX}/bin/g++.exe"
-            '
+          
+          mkdir -p /etc/apt/apt.conf.d
+          cat > /etc/apt/apt.conf.d/99archive <<EOF
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          Acquire::AllowDowngradeToInsecureRepositories "true";
+          EOF
+          
+          apt-get update
+          apt-get install -y --allow-unauthenticated \
+            build-essential wget bzip2 tar file \
+            texinfo makeinfo libgmp-dev libmpfr-dev \
+            ca-certificates
+          
+          # ===== 定义构建路径 =====
+          CROSS_PREFIX=/work/cross
+          NATIVE_PREFIX=/work/native
+          mkdir -p ${CROSS_PREFIX} ${NATIVE_PREFIX}
+          mkdir -p /work/src /work/build
+          
+          # ===== 下载并校验源码包 =====
+          cd /work/src
+          
+          echo ">>> Downloading GCC ${GCC_VERSION}..."
+          wget -nv -O gcc.tar.bz2 \
+            https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.bz2
+          bzip2 -t gcc.tar.bz2 && file gcc.tar.bz2
+          
+          echo ">>> Downloading binutils ${BINUTILS_VERSION}..."
+          wget -nv -O binutils.tar.bz2 \
+            https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2
+          bzip2 -t binutils.tar.bz2 && file binutils.tar.bz2
+          
+          echo ">>> Downloading w32api ${W32API_VERSION}..."
+          wget -nv -O w32api.tar.gz \
+            "https://sourceforge.net/projects/mingw/files/OldFiles/w32api-${W32API_VERSION}/w32api-${W32API_VERSION}.tar.gz/download"
+          gzip -t w32api.tar.gz && file w32api.tar.gz
+          
+          echo ">>> Downloading mingw-runtime ${MINGW_RUNTIME_VERSION}..."
+          wget -nv -O mingwrt.tar.gz \
+            "https://sourceforge.net/projects/mingw/files/OldFiles/mingw-runtime-${MINGW_RUNTIME_VERSION}/mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz/download"
+          gzip -t mingwrt.tar.gz && file mingwrt.tar.gz
+          
+          # ===== 解压源码 =====
+          echo ">>> Extracting sources..."
+          tar xjf gcc.tar.bz2
+          tar xjf binutils.tar.bz2
+          tar xzf w32api.tar.gz
+          tar xzf mingwrt.tar.gz
+          
+          # ===== 通用编译辅助函数 =====
+          run_make() {
+            local logbase="$1"
+            shift
+            
+            echo ">>> Running make with logging to ${logbase}.log..."
+            if make "$@" > /work/build/${logbase}.log 2>&1; then
+              echo ">>> Build succeeded"
+              tail -80 /work/build/${logbase}.log
+              return 0
+            else
+              echo "!!! Build FAILED, last 80 lines:"
+              tail -80 /work/build/${logbase}.log
+              echo ""
+              echo "!!! Extracting error lines:"
+              grep -iE "error:|undefined reference|cannot find|No rule to make target" /work/build/${logbase}.log | head -20 || true
+              echo ""
+              echo "!!! Retrying with -j1 for clearer error..."
+              make -j1 "$@" > /work/build/${logbase}.serial.log 2>&1 || true
+              tail -100 /work/build/${logbase}.serial.log
+              return 1
+            fi
+          }
+          
+          # ==================== 阶段 1: 交叉 binutils (build=linux, host=linux, target=mingw32) ====================
+          echo ""
+          echo "=========================================="
+          echo "Stage 1: Building cross binutils"
+          echo "=========================================="
+          cd /work/build
+          mkdir -p binutils-cross && cd binutils-cross
+          
+          /work/src/binutils-${BINUTILS_VERSION}/configure \
+            --prefix=${CROSS_PREFIX} \
+            --target=${TARGET} \
+            --disable-nls \
+            --disable-werror \
+            --disable-shared \
+            --with-sysroot \
+            MAKEINFO=true
+          
+          run_make "binutils-cross" -j$(nproc) MAKEINFO=true all
+          make install MAKEINFO=true
+          
+          export PATH="${CROSS_PREFIX}/bin:${PATH}"
+          echo ">>> Cross binutils installed:"
+          ls -lh ${CROSS_PREFIX}/bin/
+          
+          # ==================== 阶段 2: 安装 MinGW headers & 构建交叉 GCC ====================
+          echo ""
+          echo "=========================================="
+          echo "Stage 2: Installing MinGW headers"
+          echo "=========================================="
+          
+          mkdir -p ${CROSS_PREFIX}/${TARGET}/include
+          mkdir -p ${CROSS_PREFIX}/${TARGET}/lib
+          
+          # w32api headers
+          cd /work/src/w32api-${W32API_VERSION}
+          cp -r include/* ${CROSS_PREFIX}/${TARGET}/include/
+          
+          # mingw-runtime headers + CRT stub
+          cd /work/src/mingwrt-${MINGW_RUNTIME_VERSION}
+          cp -r include/* ${CROSS_PREFIX}/${TARGET}/include/
+          
+          echo ">>> Headers installed:"
+          ls ${CROSS_PREFIX}/${TARGET}/include/ | head -20
+          
+          # ==================== 阶段 3: 交叉 GCC (bootstrap, all-gcc + all-target-libgcc) ====================
+          echo ""
+          echo "=========================================="
+          echo "Stage 3: Building cross GCC (bootstrap)"
+          echo "=========================================="
+          cd /work/build
+          mkdir -p gcc-cross && cd gcc-cross
+          
+          /work/src/gcc-${GCC_VERSION}/configure \
+            --prefix=${CROSS_PREFIX} \
+            --target=${TARGET} \
+            --enable-languages=c,c++ \
+            --with-headers=${CROSS_PREFIX}/${TARGET}/include \
+            --disable-nls \
+            --disable-shared \
+            --disable-threads \
+            --disable-win32-registry \
+            --disable-werror \
+            --with-gnu-as \
+            --with-gnu-ld \
+            --without-x \
+            MAKEINFO=true
+          
+          run_make "gcc-cross-all-gcc" -j$(nproc) MAKEINFO=true all-gcc
+          make install-gcc MAKEINFO=true
+          
+          # 现在安装 w32api 和 mingw-runtime 库
+          echo ">>> Installing w32api libraries..."
+          cd /work/src/w32api-${W32API_VERSION}
+          ./configure --host=${TARGET} --prefix=${CROSS_PREFIX}/${TARGET}
+          make install-libraries
+          
+          echo ">>> Building mingw-runtime CRT..."
+          cd /work/src/mingwrt-${MINGW_RUNTIME_VERSION}
+          ./configure --host=${TARGET} --prefix=${CROSS_PREFIX}/${TARGET}
+          make
+          make install
+          
+          echo ">>> Libraries installed:"
+          ls -lh ${CROSS_PREFIX}/${TARGET}/lib/ | head -20
+          
+          # 完成 libgcc
+          cd /work/build/gcc-cross
+          run_make "gcc-cross-libgcc" -j$(nproc) MAKEINFO=true all-target-libgcc
+          make install-target-libgcc MAKEINFO=true
+          
+          echo ">>> Cross GCC ready:"
+          ${CROSS_PREFIX}/bin/${TARGET}-gcc --version
+          
+          # ==================== 阶段 4: Canadian Cross - Native binutils (build=linux, host=mingw32, target=mingw32) ====================
+          echo ""
+          echo "=========================================="
+          echo "Stage 4: Building native Windows binutils"
+          echo "=========================================="
+          cd /work/build
+          mkdir -p binutils-native && cd binutils-native
+          
+          BUILD_SYSTEM=$(/work/src/binutils-${BINUTILS_VERSION}/config.guess)
+          
+          /work/src/binutils-${BINUTILS_VERSION}/configure \
+            --build=${BUILD_SYSTEM} \
+            --host=${TARGET} \
+            --target=${TARGET} \
+            --prefix=${NATIVE_PREFIX} \
+            --disable-nls \
+            --disable-werror \
+            --disable-shared \
+            MAKEINFO=true
+          
+          run_make "binutils-native" -j$(nproc) MAKEINFO=true all
+          make install MAKEINFO=true
+          
+          echo ">>> Native binutils built:"
+          file ${NATIVE_PREFIX}/bin/*.exe | head -5
+          
+          # ==================== 阶段 5: Canadian Cross - Native GCC (build=linux, host=mingw32, target=mingw32) ====================
+          echo ""
+          echo "=========================================="
+          echo "Stage 5: Building native Windows GCC"
+          echo "=========================================="
+          cd /work/build
+          mkdir -p gcc-native && cd gcc-native
+          
+          /work/src/gcc-${GCC_VERSION}/configure \
+            --build=${BUILD_SYSTEM} \
+            --host=${TARGET} \
+            --target=${TARGET} \
+            --prefix=${NATIVE_PREFIX} \
+            --enable-languages=c,c++ \
+            --with-headers=${CROSS_PREFIX}/${TARGET}/include \
+            --disable-nls \
+            --disable-shared \
+            --disable-threads \
+            --disable-win32-registry \
+            --disable-werror \
+            --with-gnu-as \
+            --with-gnu-ld \
+            --without-x \
+            MAKEINFO=true
+          
+          run_make "gcc-native" -j$(nproc) MAKEINFO=true all
+          make install MAKEINFO=true
+          
+          echo ">>> Native GCC built:"
+          file ${NATIVE_PREFIX}/bin/gcc.exe
+          
+          # ==================== 阶段 6: 复制运行时到最终包 ====================
+          echo ""
+          echo "=========================================="
+          echo "Stage 6: Copying runtime files"
+          echo "=========================================="
+          
+          mkdir -p ${NATIVE_PREFIX}/${TARGET}
+          cp -r ${CROSS_PREFIX}/${TARGET}/include ${NATIVE_PREFIX}/${TARGET}/
+          cp -r ${CROSS_PREFIX}/${TARGET}/lib ${NATIVE_PREFIX}/${TARGET}/
+          
+          echo ">>> Final package structure:"
+          ls -lh ${NATIVE_PREFIX}/
+          
+          # ==================== 打包 ====================
+          cd /work
+          tar -cJf gcc-${GCC_VERSION}-${TARGET}-native-windows.tar.xz native/
+          
+          ls -lh gcc-*.tar.xz
+          echo ">>> Build completed successfully!"
+          '
 
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: work/build/*.log
-          if-no-files-found: warn
+          path: ${{ github.workspace }}/work/build/*.log
+          retention-days: 7
 
-      - name: Upload artifact
+      - name: Upload release package
         uses: actions/upload-artifact@v4
         with:
-          name: gcc-3.4.4-i686-pc-mingw32-native-windows
-          path: dist/*.tar.xz
-          if-no-files-found: error
+          name: gcc-${{ env.GCC_VERSION }}-${{ env.TARGET }}-native-windows
+          path: ${{ github.workspace }}/work/gcc-*.tar.xz
 
-      - name: Publish GitHub Release
-        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: GCC 3.4.4 MinGW native Windows
+          name: GCC ${{ env.GCC_VERSION }} for Windows (MinGW32)
           body: |
-            Native Windows GCC 3.4.4 for i686-pc-mingw32 (Canadian Cross on Debian 8).
-            Components: GCC 3.4.4 / binutils 2.16.1 / w32api 3.11 / mingw-runtime 3.14
-          files: dist/*.tar.xz
+            Native Windows build of GCC ${{ env.GCC_VERSION }} (i686-pc-mingw32)
+            
+            **Components:**
+            - GCC: ${{ env.GCC_VERSION }}
+            - Binutils: ${{ env.BINUTILS_VERSION }}
+            - w32api: ${{ env.W32API_VERSION }}
+            - mingw-runtime: ${{ env.MINGW_RUNTIME_VERSION }}
+            
+            **Installation:**
+            1. Extract to C:\mingw (or any path without spaces)
+            2. Add C:\mingw\native\bin to PATH
+            3. Test: `gcc --version`
+            
+            Built via Canadian Cross (Linux → Windows host → Windows target)
+          files: ${{ github.workspace }}/work/gcc-*.tar.xz
+          draft: false
+          prerelease: false
