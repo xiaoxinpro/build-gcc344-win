@@ -65,6 +65,7 @@ jobs:
           # ===== 定义构建路径 =====
           CROSS_PREFIX=/work/cross
           NATIVE_PREFIX=/work/native
+          export MAKEINFO=true
           mkdir -p ${CROSS_PREFIX} ${NATIVE_PREFIX}
           mkdir -p /work/src /work/build
           
@@ -136,8 +137,7 @@ jobs:
             --disable-nls \
             --disable-werror \
             --disable-shared \
-            --with-sysroot \
-            MAKEINFO=true
+            --with-sysroot
           
           run_make "binutils-cross" -j$(nproc) MAKEINFO=true all
           make install MAKEINFO=true
@@ -186,8 +186,7 @@ jobs:
             --disable-werror \
             --with-gnu-as \
             --with-gnu-ld \
-            --without-x \
-            MAKEINFO=true
+            --without-x
           
           run_make "gcc-cross-all-gcc" -j$(nproc) MAKEINFO=true all-gcc
           make install-gcc MAKEINFO=true
@@ -232,8 +231,7 @@ jobs:
             --prefix=${NATIVE_PREFIX} \
             --disable-nls \
             --disable-werror \
-            --disable-shared \
-            MAKEINFO=true
+            --disable-shared
           
           run_make "binutils-native" -j$(nproc) MAKEINFO=true all
           make install MAKEINFO=true
@@ -263,8 +261,7 @@ jobs:
             --disable-werror \
             --with-gnu-as \
             --with-gnu-ld \
-            --without-x \
-            MAKEINFO=true
+            --without-x
           
           run_make "gcc-native" -j$(nproc) MAKEINFO=true all
           make install MAKEINFO=true
