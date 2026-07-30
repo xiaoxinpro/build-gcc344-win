@@ -1,412 +1,235 @@
-name: Build MinGW GCC 3.4.4 for Windows
+name: Build GCC 3.4.4 MinGW
 
 on:
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Release tag (e.g. v3.4.4-build1)"
-        required: true
-        default: "v3.4.4-build1"
-
   push:
+    paths:
+      - ".github/workflows/**"
+  pull_request:
     paths:
       - ".github/workflows/**"
 
 permissions:
   contents: write
 
+env:
+  TARGET: i686-pc-mingw32
+  GCC_VERSION: 3.4.4
+  BINUTILS_VERSION: 2.16.1
+  W32API_VERSION: 3.11
+  MINGW_RUNTIME_VERSION: 3.14
+  RELEASE_TAG: gcc-3.4.4-mingw32
+
 jobs:
   build:
-    name: Build native Windows GCC 3.4.4
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
-    env:
-      TARGET: i686-pc-mingw32
-      PREFIX: /work/mingw344-bootstrap
-      WIN_PREFIX: /work/mingw344-win
-      GCC_VERSION: "3.4.4"
-      BINUTILS_VERSION: "2.16.1"
-      W32API_VERSION: "3.6"
-      MINGWRT_VERSION: "3.9"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space
+      - name: Prepare workspace
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          docker system prune -af
-          df -h
+          rm -rf work dist
+          mkdir -p work dist
 
-      - name: Prepare directories
-        run: |
-          mkdir -p "${{ github.workspace }}/work/src"
-          mkdir -p "${{ github.workspace }}/work/build"
-          mkdir -p "${{ github.workspace }}/work/mingw344-bootstrap"
-          mkdir -p "${{ github.workspace }}/work/mingw344-win"
-
-      - name: Download source packages
-        working-directory: ${{ github.workspace }}/work/src
-        run: |
-          set -eux
-
-          wget -nv \
-            "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.bz2"
-
-          wget -nv \
-            "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2"
-
-          wget -nv \
-            -O "w32api-${W32API_VERSION}-src.tar.gz" \
-            "https://sourceforge.net/projects/mingw/files/MinGW/Base/w32api/w32api-${W32API_VERSION}/w32api-${W32API_VERSION}-src.tar.gz/download"
-
-          wget -nv \
-            -O "mingwrt-${MINGWRT_VERSION}-src.tar.gz" \
-            "https://sourceforge.net/projects/mingw/files/MinGW/Base/mingw-runtime/mingwrt-${MINGWRT_VERSION}/mingwrt-${MINGWRT_VERSION}-mingw32-src.tar.gz/download"
-
-          ls -lh
-
-      - name: Verify source packages
-        working-directory: ${{ github.workspace }}/work/src
-        run: |
-          set -eux
-
-          file "gcc-${GCC_VERSION}.tar.bz2"
-          file "binutils-${BINUTILS_VERSION}.tar.bz2"
-          file "w32api-${W32API_VERSION}-src.tar.gz"
-          file "mingwrt-${MINGWRT_VERSION}-src.tar.gz"
-
-          tar tjf "gcc-${GCC_VERSION}.tar.bz2" >/dev/null
-          tar tjf "binutils-${BINUTILS_VERSION}.tar.bz2" >/dev/null
-          tar tzf "w32api-${W32API_VERSION}-src.tar.gz" >/dev/null
-          tar tzf "mingwrt-${MINGWRT_VERSION}-src.tar.gz" >/dev/null
-
-      - name: Pull legacy Debian image
-        run: |
-          docker pull debian:8
-
-      - name: Build toolchain in Debian 8 Docker
+      - name: Build native Windows GCC in Debian 8
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/work:/work" \
-            -w /work \
+            -v "${{ github.workspace }}/dist:/dist" \
             -e TARGET="${TARGET}" \
-            -e PREFIX="${PREFIX}" \
-            -e WIN_PREFIX="${WIN_PREFIX}" \
             -e GCC_VERSION="${GCC_VERSION}" \
             -e BINUTILS_VERSION="${BINUTILS_VERSION}" \
             -e W32API_VERSION="${W32API_VERSION}" \
-            -e MINGWRT_VERSION="${MINGWRT_VERSION}" \
+            -e MINGW_RUNTIME_VERSION="${MINGW_RUNTIME_VERSION}" \
             debian:8 \
             /bin/bash -euxo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
 
-              cat > /etc/apt/sources.list <<EOF
-              deb http://archive.debian.org/debian/ jessie main
-              deb http://archive.debian.org/debian-security jessie/updates main
-              EOF
+              sed -i \
+                -e "s|http://deb.debian.org/debian|http://archive.debian.org/debian|g" \
+                -e "s|http://security.debian.org|http://archive.debian.org/debian-security|g" \
+                /etc/apt/sources.list
 
-              cat > /etc/apt/apt.conf.d/99archive <<EOF
-              Acquire::Check-Valid-Until "false";
-              Acquire::AllowInsecureRepositories "true";
-              Acquire::AllowDowngradeToInsecureRepositories "true";
-              EOF
+              printf "Acquire::Check-Valid-Until \"false\";\n" > /etc/apt/apt.conf.d/99archive
 
               apt-get update
-
-              apt-get install -y --force-yes \
-                build-essential \
-                bison \
-                flex \
-                texinfo \
-                make \
-                patch \
-                file \
-                wget \
+              apt-get install -y --no-install-recommends \
+                ca-certificates \
                 curl \
-                gzip \
                 bzip2 \
+                gzip \
                 tar \
                 xz-utils \
-                autoconf \
-                automake \
-                libtool \
-                libgmp-dev \
-                libmpfr-dev
+                make \
+                gcc \
+                g++ \
+                libc6-dev \
+                patch \
+                file
 
-              cd /work/src
-
-              tar xjf "gcc-${GCC_VERSION}.tar.bz2"
-              tar xjf "binutils-${BINUTILS_VERSION}.tar.bz2"
-
-              rm -rf w32api mingwrt
-              mkdir -p w32api mingwrt
-
-              tar xzf "w32api-${W32API_VERSION}-src.tar.gz" \
-                -C w32api \
-                --strip-components=1
-
-              tar xzf "mingwrt-${MINGWRT_VERSION}-src.tar.gz" \
-                -C mingwrt \
-                --strip-components=1
-
+              export PREFIX=/work/cross
+              export NATIVE_PREFIX=/work/native
+              export SRC=/work/src
+              export BUILD=/work/build
               export PATH="${PREFIX}/bin:${PATH}"
-              export MAKEINFO=true
 
-              echo "========== Stage 1: Cross Binutils =========="
+              mkdir -p "${SRC}" "${BUILD}" "${PREFIX}" "${NATIVE_PREFIX}"
 
-              mkdir -p /work/build/binutils-cross
-              cd /work/build/binutils-cross
+              download() {
+                url="$1"
+                out="$2"
 
-              /work/src/binutils-${BINUTILS_VERSION}/configure \
-                --target="${TARGET}" \
+                curl -L --fail --retry 5 --retry-delay 5 -o "${out}" "${url}"
+
+                case "${out}" in
+                  *.tar.gz|*.tgz)
+                    gzip -t "${out}"
+                    ;;
+                  *.tar.bz2|*.tbz2)
+                    bzip2 -t "${out}"
+                    ;;
+                  *)
+                    echo "unknown archive extension: ${out}" >&2
+                    exit 1
+                    ;;
+                esac
+
+                if file "${out}" | grep -qiE "HTML|text"; then
+                  echo "downloaded file is not an archive: ${out}" >&2
+                  file "${out}" >&2
+                  exit 1
+                fi
+              }
+
+              cd "${SRC}"
+
+              download \
+                "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2" \
+                "binutils-${BINUTILS_VERSION}.tar.bz2"
+
+              download \
+                "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.bz2" \
+                "gcc-${GCC_VERSION}.tar.bz2"
+
+              download \
+                "https://sourceforge.net/projects/mingw/files/OldFiles/w32api-${W32API_VERSION}/w32api-${W32API_VERSION}.tar.gz/download" \
+                "w32api-${W32API_VERSION}.tar.gz"
+
+              download \
+                "https://sourceforge.net/projects/mingw/files/OldFiles/mingw-runtime-${MINGW_RUNTIME_VERSION}/mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz/download" \
+                "mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz"
+
+              tar -xjf "binutils-${BINUTILS_VERSION}.tar.bz2"
+              tar -xjf "gcc-${GCC_VERSION}.tar.bz2"
+
+              mkdir -p "${PREFIX}/${TARGET}"
+              tar -xzf "w32api-${W32API_VERSION}.tar.gz" -C "${PREFIX}/${TARGET}"
+              tar -xzf "mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz" -C "${PREFIX}/${TARGET}"
+
+              ln -sfn "${TARGET}" "${PREFIX}/mingw"
+
+              mkdir -p "${BUILD}/binutils-cross"
+              cd "${BUILD}/binutils-cross"
+              "${SRC}/binutils-${BINUTILS_VERSION}/configure" \
                 --prefix="${PREFIX}" \
+                --target="${TARGET}" \
                 --disable-nls \
-                --disable-werror \
-                --disable-shared
-
-              make -j2 MAKEINFO=true
-              make install MAKEINFO=true
-
-              test -f "${PREFIX}/bin/${TARGET}-as"
-              test -f "${PREFIX}/bin/${TARGET}-ld"
-
-              echo "========== Stage 2A: w32api =========="
-
-              cd /work/src/w32api
-
-              ./configure \
-                --host="${TARGET}" \
-                --prefix="${PREFIX}/${TARGET}"
-
-              make -j2
+                --disable-werror
+              make -j"$(nproc)"
               make install
 
-              echo "========== Stage 2B: mingw-runtime =========="
+              mkdir -p "${BUILD}/gcc-cross"
+              cd "${BUILD}/gcc-cross"
+              "${SRC}/gcc-${GCC_VERSION}/configure" \
+                --prefix="${PREFIX}" \
+                --target="${TARGET}" \
+                --enable-languages=c,c++ \
+                --disable-nls \
+                --disable-shared \
+                --disable-win32-registry \
+                --with-headers="${PREFIX}/${TARGET}/include" \
+                --with-gnu-as \
+                --with-gnu-ld
+              make -j"$(nproc)" all-gcc
+              make install-gcc
+              make -j"$(nproc)" all-target-libgcc
+              make install-target-libgcc
 
-              cd /work/src/mingwrt
-
-              ./configure \
+              mkdir -p "${BUILD}/binutils-native"
+              cd "${BUILD}/binutils-native"
+              CC="${TARGET}-gcc" \
+              AR="${TARGET}-ar" \
+              RANLIB="${TARGET}-ranlib" \
+              "${SRC}/binutils-${BINUTILS_VERSION}/configure" \
+                --prefix="${NATIVE_PREFIX}" \
+                --build="$(gcc -dumpmachine)" \
                 --host="${TARGET}" \
-                --prefix="${PREFIX}/${TARGET}"
-
-              make -j2
+                --target="${TARGET}" \
+                --disable-nls \
+                --disable-werror
+              make -j"$(nproc)"
               make install
 
-              test -d "${PREFIX}/${TARGET}/include"
-              test -d "${PREFIX}/${TARGET}/lib"
-
-              echo "========== Stage 3: Bootstrap Cross GCC =========="
-
-              mkdir -p /work/build/gcc-cross
-              cd /work/build/gcc-cross
-
-              /work/src/gcc-${GCC_VERSION}/configure \
-                --target="${TARGET}" \
-                --prefix="${PREFIX}" \
-                --with-headers="${PREFIX}/${TARGET}/include" \
-                --with-libs="${PREFIX}/${TARGET}/lib" \
-                --enable-languages=c,c++ \
-                --disable-nls \
-                --disable-win32-registry \
-                --disable-shared \
-                --enable-threads=win32 \
-                --with-dwarf2
-
-              make -j2 MAKEINFO=true
-              make install MAKEINFO=true
-
-              "${PREFIX}/bin/${TARGET}-gcc" --version
-              "${PREFIX}/bin/${TARGET}-g++" --version
-
-              echo "========== Stage 4: Native Windows Binutils =========="
-
-              mkdir -p /work/build/binutils-native
-              cd /work/build/binutils-native
-
-              BUILD_SYSTEM=$(
-                /work/src/binutils-${BINUTILS_VERSION}/config.guess
-              )
-
-              /work/src/binutils-${BINUTILS_VERSION}/configure \
-                --build="${BUILD_SYSTEM}" \
+              mkdir -p "${BUILD}/gcc-native"
+              cd "${BUILD}/gcc-native"
+              CC="${TARGET}-gcc" \
+              CXX="${TARGET}-g++" \
+              AR="${TARGET}-ar" \
+              RANLIB="${TARGET}-ranlib" \
+              "${SRC}/gcc-${GCC_VERSION}/configure" \
+                --prefix="${NATIVE_PREFIX}" \
+                --build="$(gcc -dumpmachine)" \
                 --host="${TARGET}" \
                 --target="${TARGET}" \
-                --prefix="${WIN_PREFIX}" \
-                --disable-nls \
-                --disable-werror \
-                --disable-shared
-
-              make -j2 MAKEINFO=true
-              make install MAKEINFO=true
-
-              test -f "${WIN_PREFIX}/bin/as.exe"
-              test -f "${WIN_PREFIX}/bin/ld.exe"
-
-              file "${WIN_PREFIX}/bin/as.exe"
-              file "${WIN_PREFIX}/bin/ld.exe"
-
-              echo "========== Stage 5: Native Windows GCC =========="
-
-              mkdir -p /work/build/gcc-native
-              cd /work/build/gcc-native
-
-              BUILD_SYSTEM=$(
-                /work/src/gcc-${GCC_VERSION}/config.guess
-              )
-
-              /work/src/gcc-${GCC_VERSION}/configure \
-                --build="${BUILD_SYSTEM}" \
-                --host="${TARGET}" \
-                --target="${TARGET}" \
-                --prefix="${WIN_PREFIX}" \
-                --with-headers="${PREFIX}/${TARGET}/include" \
-                --with-libs="${PREFIX}/${TARGET}/lib" \
                 --enable-languages=c,c++ \
                 --disable-nls \
-                --disable-win32-registry \
                 --disable-shared \
-                --enable-threads=win32 \
-                --with-dwarf2
+                --disable-win32-registry \
+                --with-gnu-as \
+                --with-gnu-ld
+              make -j"$(nproc)" all-gcc
+              make install-gcc
+              make -j"$(nproc)" all-target-libgcc
+              make install-target-libgcc
 
-              make -j2 MAKEINFO=true
-              make install MAKEINFO=true
+              mkdir -p "${NATIVE_PREFIX}/${TARGET}"
+              cp -a "${PREFIX}/${TARGET}/include" "${NATIVE_PREFIX}/${TARGET}/"
+              cp -a "${PREFIX}/${TARGET}/lib" "${NATIVE_PREFIX}/${TARGET}/"
 
-              test -f "${WIN_PREFIX}/bin/gcc.exe"
-              test -f "${WIN_PREFIX}/bin/g++.exe"
+              cd /work
+              tar -cJf "/dist/gcc-${GCC_VERSION}-${TARGET}-native-windows.tar.xz" -C "${NATIVE_PREFIX}" .
 
-              echo "========== Stage 6: Install target headers and libraries =========="
-
-              mkdir -p "${WIN_PREFIX}/${TARGET}"
-
-              cp -a \
-                "${PREFIX}/${TARGET}/include" \
-                "${WIN_PREFIX}/${TARGET}/"
-
-              cp -a \
-                "${PREFIX}/${TARGET}/lib" \
-                "${WIN_PREFIX}/${TARGET}/"
-
-              echo "========== Verify Windows executables =========="
-
-              file "${WIN_PREFIX}/bin/gcc.exe"
-              file "${WIN_PREFIX}/bin/g++.exe"
-
-              find "${WIN_PREFIX}" -maxdepth 3 -type f | sort | head -100
+              file "${NATIVE_PREFIX}/bin/gcc.exe"
+              test -f "${NATIVE_PREFIX}/bin/gcc.exe"
+              test -f "${NATIVE_PREFIX}/bin/g++.exe"
+              test -f "${NATIVE_PREFIX}/bin/as.exe"
+              test -f "${NATIVE_PREFIX}/bin/ld.exe"
             '
 
-      - name: Create README
-        working-directory: ${{ github.workspace }}/work
-        run: |
-          cat > README.txt <<EOF
-          MinGW GCC ${GCC_VERSION} for Windows
-
-          Components
-          ----------
-          GCC:           ${GCC_VERSION}
-          Binutils:      ${BINUTILS_VERSION}
-          w32api:        ${W32API_VERSION}
-          mingw-runtime: ${MINGWRT_VERSION}
-
-          Target:        ${TARGET}
-          Languages:     C, C++
-          Thread model:  win32
-          Exceptions:    DWARF-2
-
-          Installation
-          ------------
-          1. Extract mingw-gcc-${GCC_VERSION}-win32.tar.gz to C:\mingw344
-          2. Add C:\mingw344\bin to PATH.
-          3. Open a new Command Prompt.
-          4. Run: gcc --version
-
-          Usage
-          -----
-          gcc hello.c -o hello.exe
-          g++ hello.cpp -o hello.exe
-          EOF
-
-      - name: Create release archive and checksum
-        working-directory: ${{ github.workspace }}/work
-        run: |
-          set -eux
-
-          tar czf "mingw-gcc-${GCC_VERSION}-win32.tar.gz" \
-            "mingw344-win"
-
-          sha256sum "mingw-gcc-${GCC_VERSION}-win32.tar.gz" \
-            > "mingw-gcc-${GCC_VERSION}-win32.tar.gz.sha256"
-
-          cp "mingw-gcc-${GCC_VERSION}-win32.tar.gz" \
-            "${{ github.workspace }}/"
-
-          cp "mingw-gcc-${GCC_VERSION}-win32.tar.gz.sha256" \
-            "${{ github.workspace }}/"
-
-          cp "README.txt" \
-            "${{ github.workspace }}/"
-
-          ls -lh "${{ github.workspace }}/mingw-gcc-${GCC_VERSION}-win32.tar.gz"
-
-      - name: Upload workflow artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mingw-gcc-${{ env.GCC_VERSION }}-win32
-          path: |
-            ${{ github.workspace }}/mingw-gcc-${{ env.GCC_VERSION }}-win32.tar.gz
-            ${{ github.workspace }}/mingw-gcc-${{ env.GCC_VERSION }}-win32.tar.gz.sha256
-            ${{ github.workspace }}/README.txt
-          retention-days: 30
+          name: gcc-3.4.4-i686-pc-mingw32-native-windows
+          path: dist/*.tar.xz
+          if-no-files-found: error
 
-      - name: Generate release tag
-        id: release
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.release_tag }}"
-          else
-            TAG="v${GCC_VERSION}-$(date -u +%Y%m%d-%H%M%S)"
-          fi
-
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release.outputs.tag }}
-          name: MinGW GCC ${{ env.GCC_VERSION }} for Windows
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: GCC 3.4.4 MinGW native Windows
           body: |
-            Native 32-bit Windows MinGW toolchain.
+            Native Windows GCC 3.4.4 for i686-pc-mingw32.
 
-            - GCC: `${{ env.GCC_VERSION }}`
-            - Binutils: `${{ env.BINUTILS_VERSION }}`
-            - w32api: `${{ env.W32API_VERSION }}`
-            - mingw-runtime: `${{ env.MINGWRT_VERSION }}`
-            - Target: `${{ env.TARGET }}`
-            - Languages: C, C++
-            - Thread model: win32
-            - Exception model: DWARF-2
+            Built with a Canadian Cross flow on Debian 8:
+            Linux build -> Windows host -> Windows target.
 
-            Extract the archive to a path without spaces, such as `C:\mingw344`, then add `C:\mingw344\bin` to `PATH`.
-          files: |
-            ${{ github.workspace }}/mingw-gcc-${{ env.GCC_VERSION }}-win32.tar.gz
-            ${{ github.workspace }}/mingw-gcc-${{ env.GCC_VERSION }}-win32.tar.gz.sha256
-            ${{ github.workspace }}/README.txt
-          draft: false
-          prerelease: false
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build summary
-        run: |
-          {
-            echo "## Build completed"
-            echo ""
-            echo "- Release: \`${{ steps.release.outputs.tag }}\`"
-            echo "- GCC: \`${GCC_VERSION}\`"
-            echo "- Target: \`${TARGET}\`"
-            echo "- Archive size: \`$(du -h "${{ github.workspace }}/mingw-gcc-${GCC_VERSION}-win32.tar.gz" | cut -f1)\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+            Components:
+            - GCC 3.4.4
+            - binutils 2.16.1
+            - w32api 3.11
+            - mingw-runtime 3.14
+          files: dist/*.tar.xz
