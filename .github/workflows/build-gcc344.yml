@@ -59,7 +59,7 @@ jobs:
           apt-get update
           apt-get install -y --allow-unauthenticated \
             build-essential wget bzip2 tar file \
-            texinfo makeinfo libgmp-dev libmpfr-dev \
+            texinfo libgmp-dev libmpfr-dev \
             ca-certificates
           
           # ===== 定义构建路径 =====
