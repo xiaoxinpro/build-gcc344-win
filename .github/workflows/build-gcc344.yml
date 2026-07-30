@@ -62,11 +62,11 @@ jobs:
 
           wget -nv \
             -O "w32api-${W32API_VERSION}-src.tar.gz" \
-            "https://downloads.sourceforge.net/project/mingw/MinGW/Base/w32api/w32api-${W32API_VERSION}/w32api-${W32API_VERSION}-src.tar.gz"
+            "https://sourceforge.net/projects/mingw/files/MinGW/Base/w32api/w32api-${W32API_VERSION}/w32api-${W32API_VERSION}-src.tar.gz/download"
 
           wget -nv \
             -O "mingwrt-${MINGWRT_VERSION}-src.tar.gz" \
-            "https://downloads.sourceforge.net/project/mingw/MinGW/Base/mingw-runtime/mingwrt-${MINGWRT_VERSION}/mingwrt-${MINGWRT_VERSION}-mingw32-src.tar.gz"
+            "https://sourceforge.net/projects/mingw/files/MinGW/Base/mingw-runtime/mingwrt-${MINGWRT_VERSION}/mingwrt-${MINGWRT_VERSION}-mingw32-src.tar.gz/download"
 
           ls -lh
 
