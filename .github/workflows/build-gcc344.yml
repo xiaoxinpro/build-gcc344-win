@@ -44,10 +44,10 @@ jobs:
             -e W32API_VERSION="${W32API_VERSION}" \
             -e MINGW_RUNTIME_VERSION="${MINGW_RUNTIME_VERSION}" \
             debian:8 \
-            /bin/bash -euxo pipefail -c '
+            /bin/bash -c '
+              set -euxo pipefail
               export DEBIAN_FRONTEND=noninteractive
 
-              # 修正 Debian 8 归档源配置
               cat > /etc/apt/sources.list <<EOF
           deb http://archive.debian.org/debian/ jessie main
           deb http://archive.debian.org/debian-security/ jessie/updates main
@@ -81,66 +81,50 @@ jobs:
               download() {
                 url="$1"
                 out="$2"
-
+                echo "Downloading ${url} -> ${out}"
                 curl -L --fail --retry 5 --retry-delay 5 -o "${out}" "${url}"
-
                 case "${out}" in
-                  *.tar.gz|*.tgz)
-                    gzip -t "${out}"
-                    ;;
-                  *.tar.bz2|*.tbz2)
-                    bzip2 -t "${out}"
-                    ;;
-                  *)
-                    echo "unknown archive extension: ${out}" >&2
-                    exit 1
-                    ;;
+                  *.tar.gz|*.tgz) gzip -t "${out}" ;;
+                  *.tar.bz2|*.tbz2) bzip2 -t "${out}" ;;
+                  *) echo "unknown archive: ${out}" >&2; exit 1 ;;
                 esac
-
                 if file "${out}" | grep -qiE "HTML|text"; then
-                  echo "downloaded file is not an archive: ${out}" >&2
+                  echo "ERROR: downloaded HTML instead of archive" >&2
                   file "${out}" >&2
                   exit 1
                 fi
               }
 
               cd "${SRC}"
+              download "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2" "binutils-${BINUTILS_VERSION}.tar.bz2"
+              download "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.bz2" "gcc-${GCC_VERSION}.tar.bz2"
+              download "https://sourceforge.net/projects/mingw/files/OldFiles/w32api-${W32API_VERSION}/w32api-${W32API_VERSION}.tar.gz/download" "w32api-${W32API_VERSION}.tar.gz"
+              download "https://sourceforge.net/projects/mingw/files/OldFiles/mingw-runtime-${MINGW_RUNTIME_VERSION}/mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz/download" "mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz"
 
-              download \
-                "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2" \
-                "binutils-${BINUTILS_VERSION}.tar.bz2"
-
-              download \
-                "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.bz2" \
-                "gcc-${GCC_VERSION}.tar.bz2"
-
-              download \
-                "https://sourceforge.net/projects/mingw/files/OldFiles/w32api-${W32API_VERSION}/w32api-${W32API_VERSION}.tar.gz/download" \
-                "w32api-${W32API_VERSION}.tar.gz"
-
-              download \
-                "https://sourceforge.net/projects/mingw/files/OldFiles/mingw-runtime-${MINGW_RUNTIME_VERSION}/mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz/download" \
-                "mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz"
-
+              echo "=== Extracting sources ==="
               tar -xjf "binutils-${BINUTILS_VERSION}.tar.bz2"
               tar -xjf "gcc-${GCC_VERSION}.tar.bz2"
 
+              echo "=== Installing MinGW headers and libs ==="
               mkdir -p "${PREFIX}/${TARGET}"
               tar -xzf "w32api-${W32API_VERSION}.tar.gz" -C "${PREFIX}/${TARGET}"
               tar -xzf "mingw-runtime-${MINGW_RUNTIME_VERSION}.tar.gz" -C "${PREFIX}/${TARGET}"
-
               ln -sfn "${TARGET}" "${PREFIX}/mingw"
 
+              echo "=== Building cross binutils ==="
               mkdir -p "${BUILD}/binutils-cross"
               cd "${BUILD}/binutils-cross"
               "${SRC}/binutils-${BINUTILS_VERSION}/configure" \
                 --prefix="${PREFIX}" \
                 --target="${TARGET}" \
                 --disable-nls \
-                --disable-werror
-              make -j"$(nproc)"
+                --disable-werror \
+                --with-sysroot="${PREFIX}/${TARGET}"
+              make -j"$(nproc)" 2>&1 | tail -100
               make install
+              ls -lh "${PREFIX}/bin/"
 
+              echo "=== Building cross GCC (stage 1: compiler only) ==="
               mkdir -p "${BUILD}/gcc-cross"
               cd "${BUILD}/gcc-cross"
               "${SRC}/gcc-${GCC_VERSION}/configure" \
@@ -149,15 +133,28 @@ jobs:
                 --enable-languages=c,c++ \
                 --disable-nls \
                 --disable-shared \
+                --disable-threads \
                 --disable-win32-registry \
                 --with-headers="${PREFIX}/${TARGET}/include" \
                 --with-gnu-as \
-                --with-gnu-ld
-              make -j"$(nproc)" all-gcc
+                --with-gnu-ld \
+                --without-x
+              
+              echo "=== Building all-gcc ==="
+              make -j"$(nproc)" all-gcc 2>&1 | tail -200 || (echo "=== GCC build failed, last 50 lines ==="; tail -50 config.log; exit 1)
               make install-gcc
-              make -j"$(nproc)" all-target-libgcc
+              
+              echo "=== Building libgcc ==="
+              make -j"$(nproc)" all-target-libgcc 2>&1 | tail -100
               make install-target-libgcc
 
+              echo "=== Cross toolchain verification ==="
+              ${TARGET}-gcc --version
+              ${TARGET}-g++ --version
+              ${TARGET}-as --version
+              ${TARGET}-ld --version
+
+              echo "=== Building native Windows binutils (Canadian Cross) ==="
               mkdir -p "${BUILD}/binutils-native"
               cd "${BUILD}/binutils-native"
               CC="${TARGET}-gcc" \
@@ -170,15 +167,22 @@ jobs:
                 --target="${TARGET}" \
                 --disable-nls \
                 --disable-werror
-              make -j"$(nproc)"
+              make -j"$(nproc)" 2>&1 | tail -100
               make install
 
+              echo "=== Building native Windows GCC (Canadian Cross) ==="
               mkdir -p "${BUILD}/gcc-native"
               cd "${BUILD}/gcc-native"
-              CC="${TARGET}-gcc" \
-              CXX="${TARGET}-g++" \
-              AR="${TARGET}-ar" \
-              RANLIB="${TARGET}-ranlib" \
+              
+              # 为 Canadian Cross 设置环境
+              export CC_FOR_BUILD=gcc
+              export CC="${TARGET}-gcc"
+              export CXX="${TARGET}-g++"
+              export AR="${TARGET}-ar"
+              export RANLIB="${TARGET}-ranlib"
+              export AS="${TARGET}-as"
+              export LD="${TARGET}-ld"
+              
               "${SRC}/gcc-${GCC_VERSION}/configure" \
                 --prefix="${NATIVE_PREFIX}" \
                 --build="$(gcc -dumpmachine)" \
@@ -187,26 +191,38 @@ jobs:
                 --enable-languages=c,c++ \
                 --disable-nls \
                 --disable-shared \
+                --disable-threads \
                 --disable-win32-registry \
                 --with-gnu-as \
-                --with-gnu-ld
-              make -j"$(nproc)" all-gcc
+                --with-gnu-ld \
+                --without-x
+              
+              echo "=== Building native GCC all-gcc ==="
+              make -j"$(nproc)" all-gcc 2>&1 | tail -200 || (echo "=== Native GCC build failed ==="; tail -100 config.log; exit 1)
               make install-gcc
-              make -j"$(nproc)" all-target-libgcc
+              
+              echo "=== Building native libgcc ==="
+              make -j"$(nproc)" all-target-libgcc 2>&1 | tail -100
               make install-target-libgcc
 
+              echo "=== Copying MinGW runtime to native prefix ==="
               mkdir -p "${NATIVE_PREFIX}/${TARGET}"
               cp -a "${PREFIX}/${TARGET}/include" "${NATIVE_PREFIX}/${TARGET}/"
               cp -a "${PREFIX}/${TARGET}/lib" "${NATIVE_PREFIX}/${TARGET}/"
 
+              echo "=== Packaging ==="
               cd /work
               tar -cJf "/dist/gcc-${GCC_VERSION}-${TARGET}-native-windows.tar.xz" -C "${NATIVE_PREFIX}" .
 
-              file "${NATIVE_PREFIX}/bin/gcc.exe"
-              test -f "${NATIVE_PREFIX}/bin/gcc.exe"
-              test -f "${NATIVE_PREFIX}/bin/g++.exe"
-              test -f "${NATIVE_PREFIX}/bin/as.exe"
-              test -f "${NATIVE_PREFIX}/bin/ld.exe"
+              echo "=== Verification ==="
+              ls -lh "${NATIVE_PREFIX}/bin/"
+              file "${NATIVE_PREFIX}/bin/gcc.exe" || echo "gcc.exe not found"
+              file "${NATIVE_PREFIX}/bin/g++.exe" || echo "g++.exe not found"
+              file "${NATIVE_PREFIX}/bin/as.exe" || echo "as.exe not found"
+              file "${NATIVE_PREFIX}/bin/ld.exe" || echo "ld.exe not found"
+              
+              test -f "${NATIVE_PREFIX}/bin/gcc.exe" || exit 1
+              test -f "${NATIVE_PREFIX}/bin/g++.exe" || exit 1
             '
 
       - name: Upload artifact
@@ -225,8 +241,10 @@ jobs:
           body: |
             Native Windows GCC 3.4.4 for i686-pc-mingw32.
 
-            Built with a Canadian Cross flow on Debian 8:
-            Linux build -> Windows host -> Windows target.
+            Built with Canadian Cross compilation on Debian 8:
+            - Build: x86_64-linux-gnu
+            - Host: i686-pc-mingw32
+            - Target: i686-pc-mingw32
 
             Components:
             - GCC 3.4.4
