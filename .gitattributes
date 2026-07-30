@@ -1,0 +1,8 @@
+# 统一文本文件换行，避免 Windows 本机 Git 自动改成 CRLF
+* text=auto eol=lf
+
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
