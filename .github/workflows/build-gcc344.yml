@@ -27,11 +27,13 @@ jobs:
 
       - name: Prepare work directory on host
         run: |
+          rm -rf "${{ github.workspace }}/work"
           mkdir -p "${{ github.workspace }}/work"
           chmod 777 "${{ github.workspace }}/work"
 
       - name: Build in Debian 8 container
         run: |
+          set -o pipefail
           docker run --rm \
             -v "${{ github.workspace }}/work:/work" \
             -e TARGET=${{ env.TARGET }} \
@@ -97,8 +99,38 @@ jobs:
           echo ">>> Extracting sources..."
           tar xjf gcc.tar.bz2
           tar xjf binutils.tar.bz2
-          tar xzf w32api.tar.gz
-          tar xzf mingwrt.tar.gz
+          mkdir -p w32api-src mingwrt-src
+          tar xzf w32api.tar.gz -C w32api-src
+          tar xzf mingwrt.tar.gz -C mingwrt-src
+
+          validate_mingw_package() {
+            local root="$1"
+            local name="$2"
+            if [ ! -d "${root}/include" ] || [ ! -d "${root}/lib" ]; then
+              echo "!!! ${name} archive did not extract the expected include/ and lib/ directories" >&2
+              find "${root}" -maxdepth 2 -print >&2
+              return 1
+            fi
+          }
+
+          install_mingw_package() {
+            local src="$1"
+            local prefix="$2"
+            mkdir -p "${prefix}/include" "${prefix}/lib"
+            cp -r "${src}/include/." "${prefix}/include/"
+            cp -r "${src}/lib/." "${prefix}/lib/"
+            if [ -d "${src}/bin" ]; then
+              mkdir -p "${prefix}/bin"
+              cp -r "${src}/bin/." "${prefix}/bin/"
+            fi
+          }
+
+          W32API_SRC=/work/src/w32api-src
+          MINGWRT_SRC=/work/src/mingwrt-src
+          validate_mingw_package "${W32API_SRC}" "w32api"
+          validate_mingw_package "${MINGWRT_SRC}" "mingw-runtime"
+          echo ">>> w32api source directory: ${W32API_SRC}"
+          echo ">>> mingw-runtime source directory: ${MINGWRT_SRC}"
           
           # ===== 通用编译辅助函数 =====
           run_make() {
@@ -156,13 +188,9 @@ jobs:
           mkdir -p ${CROSS_PREFIX}/${TARGET}/include
           mkdir -p ${CROSS_PREFIX}/${TARGET}/lib
           
-          # w32api headers
-          cd /work/src/w32api-${W32API_VERSION}
-          cp -r include/* ${CROSS_PREFIX}/${TARGET}/include/
-          
-          # mingw-runtime headers + CRT stub
-          cd /work/src/mingwrt-${MINGW_RUNTIME_VERSION}
-          cp -r include/* ${CROSS_PREFIX}/${TARGET}/include/
+          # 这些旧 MinGW 包是预打包的 headers/import libs，不包含可构建源码树。
+          install_mingw_package "${W32API_SRC}" "${CROSS_PREFIX}/${TARGET}"
+          install_mingw_package "${MINGWRT_SRC}" "${CROSS_PREFIX}/${TARGET}"
           
           echo ">>> Headers installed:"
           ls ${CROSS_PREFIX}/${TARGET}/include/ | head -20
@@ -192,18 +220,7 @@ jobs:
           run_make "gcc-cross-all-gcc" -j$(nproc) MAKEINFO=true all-gcc
           make install-gcc MAKEINFO=true
           
-          # 现在安装 w32api 和 mingw-runtime 库
-          echo ">>> Installing w32api libraries..."
-          cd /work/src/w32api-${W32API_VERSION}
-          ./configure --host=${TARGET} --prefix=${CROSS_PREFIX}/${TARGET}
-          make install-libraries
-          
-          echo ">>> Building mingw-runtime CRT..."
-          cd /work/src/mingwrt-${MINGW_RUNTIME_VERSION}
-          ./configure --host=${TARGET} --prefix=${CROSS_PREFIX}/${TARGET}
-          make
-          make install
-          
+          # w32api/mingw-runtime 的 headers 和库已在 Stage 2 从归档包安装。
           echo ">>> Libraries installed:"
           ls -lh ${CROSS_PREFIX}/${TARGET}/lib/ | head -20
           
@@ -279,6 +296,10 @@ jobs:
           mkdir -p ${NATIVE_PREFIX}/${TARGET}
           cp -r ${CROSS_PREFIX}/${TARGET}/include ${NATIVE_PREFIX}/${TARGET}/
           cp -r ${CROSS_PREFIX}/${TARGET}/lib ${NATIVE_PREFIX}/${TARGET}/
+          if [ -d ${CROSS_PREFIX}/${TARGET}/bin ]; then
+            mkdir -p ${NATIVE_PREFIX}/bin
+            cp -r ${CROSS_PREFIX}/${TARGET}/bin/. ${NATIVE_PREFIX}/bin/
+          fi
           
           echo ">>> Final package structure:"
           ls -lh ${NATIVE_PREFIX}/
@@ -289,14 +310,16 @@ jobs:
           
           ls -lh gcc-*.tar.xz
           echo ">>> Build completed successfully!"
-          '
+          ' 2>&1 | tee "${{ github.workspace }}/work/actions.log"
 
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: ${{ github.workspace }}/work/build/*.log
+          path: |
+            ${{ github.workspace }}/work/actions.log
+            ${{ github.workspace }}/work/build/*.log
           retention-days: 7
 
       - name: Upload release package
