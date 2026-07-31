@@ -250,8 +250,9 @@ jobs:
             --disable-werror \
             --disable-shared
           
-          run_make "binutils-native" -j$(nproc) MAKEINFO=true all
-          make install MAKEINFO=true
+          # 旧版 binutils 的 gprof 会拉起 Objective-C 目标，这里只构建工具链需要的子目标。
+          run_make "binutils-native" -j$(nproc) MAKEINFO=true all-binutils all-gas all-ld
+          make install-binutils install-gas install-ld MAKEINFO=true
           
           echo ">>> Native binutils built:"
           file ${NATIVE_PREFIX}/bin/*.exe | head -5
