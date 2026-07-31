@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  TARGET: i686-pc-mingw32
+  TARGET: mingw32
   GCC_VERSION: 3.4.4
   BINUTILS_VERSION: 2.16.1
   W32API_VERSION: 3.11
@@ -60,14 +60,16 @@ jobs:
           
           apt-get update
           apt-get install -y --allow-unauthenticated \
-            build-essential wget bzip2 tar file \
+            build-essential wget bzip2 tar file zip \
             bison flex \
             texinfo libgmp-dev libmpfr-dev \
             ca-certificates
           
           # ===== 定义构建路径 =====
           CROSS_PREFIX=/work/cross
-          NATIVE_PREFIX=/work/native
+          PACKAGE_ROOT=gcc-core-${GCC_VERSION}
+          PACKAGE_ARCHIVE=${PACKAGE_ROOT}-${TARGET}.zip
+          NATIVE_PREFIX=/work/${PACKAGE_ROOT}
           export MAKEINFO=true
           mkdir -p ${CROSS_PREFIX} ${NATIVE_PREFIX}
           mkdir -p /work/src /work/build
@@ -274,7 +276,7 @@ jobs:
             --enable-languages=c,c++ \
             --disable-nls \
             --disable-shared \
-            --disable-threads \
+            --enable-threads=win32 \
             --disable-multilib \
             --disable-win32-registry \
             --disable-werror \
@@ -294,12 +296,18 @@ jobs:
           echo "Stage 6: Copying runtime files"
           echo "=========================================="
           
-          mkdir -p ${NATIVE_PREFIX}/${TARGET}
-          cp -r ${CROSS_PREFIX}/${TARGET}/include ${NATIVE_PREFIX}/${TARGET}/
-          cp -r ${CROSS_PREFIX}/${TARGET}/lib ${NATIVE_PREFIX}/${TARGET}/
+          mkdir -p ${NATIVE_PREFIX}/include ${NATIVE_PREFIX}/lib
+          cp -r ${CROSS_PREFIX}/${TARGET}/include/. ${NATIVE_PREFIX}/include/
+          cp -r ${CROSS_PREFIX}/${TARGET}/lib/. ${NATIVE_PREFIX}/lib/
+
+          mkdir -p ${NATIVE_PREFIX}/${TARGET}/include ${NATIVE_PREFIX}/${TARGET}/lib
+          cp -r ${CROSS_PREFIX}/${TARGET}/include/. ${NATIVE_PREFIX}/${TARGET}/include/
+          cp -r ${CROSS_PREFIX}/${TARGET}/lib/. ${NATIVE_PREFIX}/${TARGET}/lib/
           if [ -d ${CROSS_PREFIX}/${TARGET}/bin ]; then
             mkdir -p ${NATIVE_PREFIX}/bin
-            cp -r ${CROSS_PREFIX}/${TARGET}/bin/. ${NATIVE_PREFIX}/bin/
+            mkdir -p ${NATIVE_PREFIX}/${TARGET}/bin
+            cp -r ${CROSS_PREFIX}/${TARGET}/bin/. ${NATIVE_PREFIX}/${TARGET}/bin/
+            find ${CROSS_PREFIX}/${TARGET}/bin -maxdepth 1 -type f -name "*.dll" -exec cp {} ${NATIVE_PREFIX}/bin/ \;
           fi
           
           echo ">>> Final package structure:"
@@ -307,9 +315,9 @@ jobs:
           
           # ==================== 打包 ====================
           cd /work
-          tar -cJf gcc-${GCC_VERSION}-${TARGET}-native-windows.tar.xz native/
+          zip -r ${PACKAGE_ARCHIVE} ${PACKAGE_ROOT}/
           
-          ls -lh gcc-*.tar.xz
+          ls -lh gcc-core-*.zip
           echo ">>> Build completed successfully!"
           ' 2>&1 | tee "${{ github.workspace }}/work/actions.log"
 
@@ -326,8 +334,8 @@ jobs:
       - name: Upload release package
         uses: actions/upload-artifact@v4
         with:
-          name: gcc-${{ env.GCC_VERSION }}-${{ env.TARGET }}-native-windows
-          path: ${{ github.workspace }}/work/gcc-*.tar.xz
+          name: gcc-core-${{ env.GCC_VERSION }}-${{ env.TARGET }}
+          path: ${{ github.workspace }}/work/gcc-core-*.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -335,7 +343,7 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: GCC ${{ env.GCC_VERSION }} for Windows (MinGW32)
           body: |
-            Native Windows build of GCC ${{ env.GCC_VERSION }} (i686-pc-mingw32)
+            Native Windows build of GCC ${{ env.GCC_VERSION }} (mingw32)
             
             **Components:**
             - GCC: ${{ env.GCC_VERSION }}
@@ -345,10 +353,10 @@ jobs:
             
             **Installation:**
             1. Extract to C:\mingw (or any path without spaces)
-            2. Add C:\mingw\native\bin to PATH
+            2. Add C:\mingw\gcc-core-${{ env.GCC_VERSION }}\bin to PATH
             3. Test: `gcc --version`
             
             Built via Canadian Cross (Linux → Windows host → Windows target)
-          files: ${{ github.workspace }}/work/gcc-*.tar.xz
+          files: ${{ github.workspace }}/work/gcc-core-*.zip
           draft: false
           prerelease: false

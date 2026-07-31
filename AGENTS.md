@@ -8,7 +8,7 @@ The main workflow is:
 
 - `.github/workflows/build-gcc344.yml`
 
-The build target is `i686-pc-mingw32`. The workflow uses an Ubuntu GitHub Actions runner, starts a Debian 8 container, builds the required cross toolchain components, then performs a Canadian Cross build to produce Windows-native GCC binaries.
+The build target is `mingw32`. The workflow uses an Ubuntu GitHub Actions runner, starts a Debian 8 container, builds the required cross toolchain components, then performs a Canadian Cross build to produce Windows-native GCC binaries.
 
 ## Toolchain Components
 
@@ -28,13 +28,13 @@ The workflow performs these major stages:
 2. Run all build steps inside a `debian:8` Docker container.
 3. Configure archived Debian Jessie package sources for legacy build dependencies.
 4. Download and validate GCC, binutils, w32api, and mingw-runtime source archives.
-5. Build Linux-hosted cross binutils for `i686-pc-mingw32`.
+5. Build Linux-hosted cross binutils for `mingw32`.
 6. Install MinGW headers and runtime libraries into the cross prefix.
 7. Build the cross GCC bootstrap compiler and `libgcc`.
 8. Build Windows-native binutils.
 9. Build Windows-native GCC.
-10. Copy runtime headers and libraries into the final native prefix.
-11. Package the result as `gcc-3.4.4-i686-pc-mingw32-native-windows.tar.xz`.
+10. Copy runtime headers and libraries into the final `gcc-core-3.4.4` package root and the `mingw32` compatibility directory.
+11. Package the result as `gcc-core-3.4.4-mingw32.zip`.
 12. Upload the package as a workflow artifact and publish it to the configured GitHub Release.
 
 ## Important Paths
@@ -74,7 +74,7 @@ For other repository files, comments added by agents should be written in Chines
 - Keep the workflow self-contained; GitHub Actions should be able to rebuild from source archives without relying on local files.
 - Preserve the explicit legacy Debian archive configuration because Debian 8 is end-of-life.
 - Preserve failure log upload behavior so build errors can be downloaded and inspected later.
-- Keep release publishing tied to the generated `gcc-*.tar.xz` package.
+- Keep release publishing tied to the generated `gcc-core-*.zip` package.
 - Be careful when changing old GCC/binutils configure flags; these projects predate many modern defaults and can fail with newer assumptions.
 
 ## Git Notes
