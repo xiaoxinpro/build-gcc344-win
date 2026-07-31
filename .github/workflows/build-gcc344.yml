@@ -211,6 +211,7 @@ jobs:
             --disable-nls \
             --disable-shared \
             --disable-threads \
+            --disable-multilib \
             --disable-win32-registry \
             --disable-werror \
             --with-gnu-as \
@@ -274,6 +275,7 @@ jobs:
             --disable-nls \
             --disable-shared \
             --disable-threads \
+            --disable-multilib \
             --disable-win32-registry \
             --disable-werror \
             --with-gnu-as \
