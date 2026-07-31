@@ -271,7 +271,6 @@ jobs:
             --target=${TARGET} \
             --prefix=${NATIVE_PREFIX} \
             --enable-languages=c,c++ \
-            --with-headers=${CROSS_PREFIX}/${TARGET}/include \
             --disable-nls \
             --disable-shared \
             --disable-threads \
