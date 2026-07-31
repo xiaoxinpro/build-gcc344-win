@@ -224,10 +224,9 @@ jobs:
           echo ">>> Libraries installed:"
           ls -lh ${CROSS_PREFIX}/${TARGET}/lib/ | head -20
           
-          # 完成 libgcc
-          cd /work/build/gcc-cross
-          run_make "gcc-cross-libgcc" -j$(nproc) MAKEINFO=true all-target-libgcc
-          make install-target-libgcc MAKEINFO=true
+          # GCC 3.4.4 的 install-gcc 已经安装 libgcc/libgcov。
+          test -f ${CROSS_PREFIX}/lib/gcc/${TARGET}/${GCC_VERSION}/libgcc.a
+          test -f ${CROSS_PREFIX}/lib/gcc/${TARGET}/${GCC_VERSION}/libgcov.a
           
           echo ">>> Cross GCC ready:"
           ${CROSS_PREFIX}/bin/${TARGET}-gcc --version
