@@ -33,7 +33,7 @@ The workflow performs these major stages:
 7. Build the cross GCC bootstrap compiler and `libgcc`.
 8. Build Windows-native binutils.
 9. Build Windows-native GCC.
-10. Copy runtime headers and libraries into the final `gcc-core-3.4.4` package root and the `mingw32` compatibility directory.
+10. Copy runtime headers and libraries into the final `gcc-core-3.4.4` package root and the `mingw32` compatibility directory, including C++ runtime libraries needed by the default `g++` link path.
 11. Package the result as `gcc-core-3.4.4-mingw32.zip`.
 12. Upload the package as a workflow artifact and publish it to the configured GitHub Release.
 

@@ -303,6 +303,9 @@ jobs:
           mkdir -p ${NATIVE_PREFIX}/${TARGET}/include ${NATIVE_PREFIX}/${TARGET}/lib
           cp -r ${CROSS_PREFIX}/${TARGET}/include/. ${NATIVE_PREFIX}/${TARGET}/include/
           cp -r ${CROSS_PREFIX}/${TARGET}/lib/. ${NATIVE_PREFIX}/${TARGET}/lib/
+          # g++ 默认搜索 ${TARGET}/lib，这里同步 C++ runtime 库，避免链接时找不到 -lstdc++。
+          find ${NATIVE_PREFIX}/lib -maxdepth 1 -type f \( -name "libstdc++*" -o -name "libsupc++*" \) \
+            -exec cp {} ${NATIVE_PREFIX}/${TARGET}/lib/ \;
           if [ -d ${CROSS_PREFIX}/${TARGET}/bin ]; then
             mkdir -p ${NATIVE_PREFIX}/bin
             mkdir -p ${NATIVE_PREFIX}/${TARGET}/bin
